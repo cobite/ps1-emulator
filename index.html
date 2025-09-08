@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PS1 Web Player</title>
+    <meta name="description" content="Play your own PlayStation 1 games." />
+
+
+    <script defer src="./wasmpsx.min.js"></script>
+    <script defer src="./scripts/jszip.min.js"></script>
+  
+
+    <style>
+      :root{
+        --bg:#0b0e12;--panel:#141922;--accent:#6dd5fa;--fg:#e8eef7;--muted:#9fb3c8;
+      }
+      *{box-sizing:border-box}
+      html,body{height:100%}
+      body{
+        margin:0;
+        font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+        color:var(--fg);
+        background:radial-gradient(1200px 600px at 20% -10%,#18202b 0,#0b0e12 60%);
+        display:grid;grid-template-rows:auto 1fr auto;
+      }
+      header{padding:16px 20px;background:#0e131b80;backdrop-filter:blur(6px);border-bottom:1px solid #18202b}
+      header h1{margin:0;font-size:18px;font-weight:600}
+      main{display:grid;grid-template-columns:340px 1fr;gap:18px;padding:18px}
+      @media(max-width:960px){main{grid-template-columns:1fr}}
+      .card{background:var(--panel);border:1px solid #223042;border-radius:16px;box-shadow:0 10px 30px rgb(0 0 0 / 30%)}
+      .sidebar{padding:16px;display:grid;gap:14px;align-content:start}
+      .sidebar h2{margin:0;font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.12em}
+      .row{display:grid;gap:8px}
+      label{font-size:13px;color:var(--muted)}
+      input[type="file"],input[type="url"],button,select{width:100%;padding:10px 12px;border-radius:12px;border:1px solid #2b3a4d;background:#101722;color:var(--fg)}
+      input[type="file"]{padding:8px 10px}
+      button{cursor:pointer;user-select:none}
+      button.ghost{background:#111826}
+      .drop{border:2px dashed #36506c;padding:14px;border-radius:12px;text-align:center;color:var(--muted)}
+      .drop.drag{border-color:var(--accent);color:var(--fg)}
+      .player-wrap{position:relative;display:grid;justify-items:center;padding:16px}
+      wasmpsx-player{width:min(100%,960px);height:calc(min(100vw,960px) * 3/4);background:#000;border-radius:12px;overflow:hidden;border:1px solid #223042}
+      .toolbar{display:flex;flex-wrap:wrap;gap:8px;position:sticky;top:0;padding:12px 16px;border-bottom:1px solid #223042;background:#0f1622d0;backdrop-filter:blur(4px);z-index:2;border-radius:16px 16px 0 0}
+      .toolbar .spacer{flex:1}
+      kbd{background:#1a2433;padding:2px 6px;border-radius:6px;border:1px solid #2b3a4d;font-size:12px}
+      footer{padding:12px 16px;color:var(--muted);border-top:1px solid #18202b;text-align:center}
+      .hint{font-size:12px;color:var(--muted)}
+      .hide{display:none!important}
+      .error{color:#ff6d6d;font-size:13px}
+    </style>
+  </head>
+
+  <body>
+    <header>
+      <h1>PS1 Web Player — WASMpsx</h1>
+    </header>
+
+    <main>
+      <section class="sidebar card" aria-label="Controls">
+        <div class="row">
+          <h2>Load a game</h2>
+          <label for="rom">Game image (containing .cue + .bin, or .zip)</label>
+          <input id="rom" type="file" accept=".cue,.bin,.iso,.img,.zip" multiple webkitdirectory directory />
+          <div class="hint">You can drop a folder containing both .cur & .bin files, a .zip archive, or directly select both .cue and .bin files.</div>
+          <div id="error" class="error hide" role="alert"></div>
+        </div>
+
+        <div class="row">
+          <label for="romUrl">…or load from URL</label>
+          <input id="romUrl" type="url" placeholder="https://example.com/game/ or .zip/.7z" />
+          <button id="btnLoadUrl" class="ghost">Load URL</button>
+          <div class="hint">URL must be CORS-enabled for your origin if it points to a binary/ZIP/7z.</div>
+        </div>
+
+        <div class="row">
+          <button id="btnPause" class="ghost">Pause</button>
+          <button id="btnResume" class="ghost">Resume</button>
+          <button id="btnReset" class="ghost">Reset</button>
+          <button id="btnFullscreen" class="ghost">Fullscreen</button>
+        </div>
+
+        <div class="row">
+          <div id="drop" class="drop" tabindex="0" role="button" aria-label="Drop PS1 image files, folders, or zip/7z here">
+            Drag & drop your .cue + .bin here
+          </div>
+        </div>
+
+        <div class="row">
+          <h2>Tips</h2>
+          <div class="hint">Click the player to focus; use keyboard/gamepad. Try <kbd>Esc</kbd> to exit fullscreen.</div>
+          <div class="hint">If the game does not start automatically, check DevTools Console for errors.</div>
+        </div>
+      </section>
+
+      <section class="card" aria-label="Player">
+        <div class="toolbar">
+          <strong id="status">Ready</strong>
+          <span class="spacer"></span>
+          <span id="meta" class="hint"></span>
+        </div>
+
+        <div class="player-wrap">
+          <wasmpsx-player id="player"></wasmpsx-player>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      Use only your own legally obtained game images
+    </footer>
+
+    <script>
+      (function () {
+        const player = document.getElementById('player');
+        const romInput = document.getElementById('rom');
+        const romUrl = document.getElementById('romUrl');
+        const btnLoadUrl = document.getElementById('btnLoadUrl');
+        const btnPause = document.getElementById('btnPause');
+        const btnResume = document.getElementById('btnResume');
+        const btnReset = document.getElementById('btnReset');
+        const btnFullscreen = document.getElementById('btnFullscreen');
+        const statusEl = document.getElementById('status');
+        const metaEl = document.getElementById('meta');
+        const drop = document.getElementById('drop');
+        const errorEl = document.getElementById('error');
+
+        function setStatus(msg) { statusEl.textContent = msg; }
+        function showError(msg) { errorEl.textContent = msg; errorEl.classList.remove('hide'); console.warn(msg); }
+        function clearError() { errorEl.textContent = ''; errorEl.classList.add('hide'); }
+
+        // Utility: try to boot with whatever API is available (defensive)
+        async function tryBoot(filename) {
+          // filename: a name present in the emulator's virtual FS (e.g., "game.cue" or "image.bin")
+          try {
+            if (typeof player.run === 'function') {
+              setStatus('Booting via player.run(' + filename + ') …');
+              await player.run({ exe: filename });
+              return true;
+            }
+            if (typeof player.loadFile === 'function') {
+              setStatus('Booting via player.loadFile(' + filename + ') …');
+              await player.loadFile(filename);
+              return true;
+            }
+            if (typeof player.loadUrl === 'function') {
+              // loadUrl traditionally fetches from network; some builds accept FS paths but many don't.
+              setStatus('Attempting player.loadUrl(' + filename + ') …');
+              try {
+                await player.loadUrl(filename);
+                return true;
+              } catch (e) {
+                console.warn('player.loadUrl failed for', filename, e);
+              }
+            }
+
+            // If none of the boot methods exist, many wasmpsx builds auto-start once the .cue/.bin is present.
+            setStatus('Files mounted — emulator may auto-start. If it does not, check console or try a different build of wasmpsx.');
+            return false;
+          } catch (e) {
+            console.error('Boot attempt failed:', e);
+            showError('Failed to boot: ' + (e && e.message ? e.message : String(e)));
+            return false;
+          }
+        }
+
+        // Main: mount every File object, then attempt to boot cue | bin
+        async function loadFiles(files) {
+          clearError();
+          if (!files || !files.length) return;
+
+          // normalize names: flatten FileList -> array of File
+          const fileMap = {};
+          files.forEach(f => fileMap[f.name] = f);
+
+          // If there's a .cue, parse its FILE references to check presence
+          const cue = files.find(f => f.name.toLowerCase().endsWith('.cue'));
+          if (cue) {
+            try {
+              const text = await cue.text();
+              const matches = [...text.matchAll(/FILE\s+"([^"]+)"/gi)].map(m => m[1]);
+              const missing = matches.filter(name => !fileMap[name]);
+              if (missing.length) {
+                showError('.cue references missing file(s): ' + missing.join(', ') + '. Please include the .bin(s).');
+                return;
+              }
+            } catch (e) {
+              console.warn('Failed to parse .cue', e);
+            }
+          }
+
+          setStatus('Writing files to emulator filesystem…');
+          try {
+            for (const f of files) {
+              // readFile will put the file into the emulator FS
+              // the exact behavior depends on the wasmpsx build
+              if (typeof player.readFile === 'function') {
+                await player.readFile(f);
+                if (player.audioContext && player.audioContext.state === 'suspended') {
+  await player.audioContext.resume(); // avoids WASMpsx stalling
+}
+                await player.tryBoot(f.name);
+              } else if (typeof window.WASMpsx === 'object' && typeof window.WASMpsx.readFile === 'function') {
+                await window.WASMpsx.readFile(f);
+             
+              } else {
+                // no readFile — can't proceed
+                throw new Error('No readFile() method found on wasmpsx element or global WASMpsx');
+              }
+            }
+
+            // prefer .cue to boot, otherwise pick common image extension
+            if (cue) {
+              await tryBoot(cue.name);
+              setStatus('Mounted and attempted to boot ' + cue.name);
+            } else {
+              const candidate = files.find(f => /\.(bin|iso|img|ccd|mdf)$/i.test(f.name)) || files[0];
+              await tryBoot(candidate.name);
+              setStatus('Mounted and attempted to boot ' + candidate.name);
+            }
+
+            metaEl.textContent = files.map(f => f.name).join(', ');
+          } catch (err) {
+            console.error(err);
+            showError('Failed to write files to emulator: ' + (err && err.message ? err.message : String(err)));
+            setStatus('Failed to load files.');
+          }
+        }
+
+        // ZIP handling using JSZip
+        async function handleZip(file) {
+          setStatus('Extracting zip…');
+          try {
+            const zip = await JSZip.loadAsync(file);
+            const outFiles = [];
+            for (const [name, entry] of Object.entries(zip.files)) {
+              if (!entry.dir) {
+                const blob = await entry.async('blob');
+                outFiles.push(new File([blob], name));
+              }
+            }
+            await loadFiles(outFiles);
+          } catch (e) {
+            console.error(e);
+            showError('Failed to extract zip file: ' + (e && e.message ? e.message : e));
+            setStatus('Ready');
+          }
+        }
+
+
+
+        // Helper to recursively traverse dropped folders (webkitGetAsEntry)
+        async function traverseEntry(entry, path = '') {
+          const results = [];
+          if (!entry) return results;
+          if (entry.isFile) {
+            return new Promise(resolve => entry.file(file => resolve([new File([file], path + entry.name)])));
+          }
+          if (entry.isDirectory) {
+            const reader = entry.createReader();
+            // readEntries may return chunks; read until empty
+            async function readAll() {
+              return new Promise((resolve) => {
+                reader.readEntries(async (entries) => {
+                  if (!entries.length) return resolve([]);
+                  const nested = [];
+                  for (const ent of entries) {
+                    const res = await traverseEntry(ent, path + entry.name + '/');
+                    nested.push(...res);
+                  }
+                  resolve(nested);
+                });
+              });
+            }
+            const nested = await readAll();
+            return nested;
+          }
+          return results;
+        }
+
+        // File input change
+        romInput.addEventListener('change', (e) => {
+          const files = Array.from(e.target.files || []);
+          if (!files.length) return;
+          const single = files.length === 1 ? files[0] : null;
+          if (single && single.name.toLowerCase().endsWith('.zip')) return handleZip(single);
+          if (single && single.name.toLowerCase().endsWith('.7z')) return handle7z(single);
+          // else normal batch
+          loadFiles(files);
+        });
+
+        // URL loader (attempt to fetch; if it's a zip/7z then extract; otherwise call loadUrl if available)
+        btnLoadUrl.addEventListener('click', async () => {
+          clearError();
+          const url = romUrl.value.trim();
+          if (!url) return;
+          setStatus('Fetching …');
+          try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const blob = await res.blob();
+            const name = url.split('/').pop().split('?')[0];
+            if (name.toLowerCase().endsWith('.zip')) return handleZip(new File([blob], name));
+            if (name.toLowerCase().endsWith('.7z')) return handle7z(new File([blob], name));
+            // If the wasmpsx element exposes loadUrl, use it (preferred for network-hosted images)
+            if (typeof player.loadUrl === 'function') {
+              try {
+                await player.loadUrl(url);
+                setStatus('Running: ' + name);
+                metaEl.textContent = url;
+                return;
+              } catch (e) {
+                // If loadUrl fails (CORS etc) fallthrough to readFile approach
+                console.warn('player.loadUrl failed, will try readFile', e);
+              }
+            }
+            // fallback: write to FS and attempt to boot
+            await loadFiles([new File([blob], name)]);
+          } catch (err) {
+            console.error(err);
+            showError('Failed to load URL. Check CORS or URL correctness.');
+            setStatus('Ready');
+          }
+        });
+
+        // basic emulator controls (optional — may be no-op if not provided by element)
+        btnPause.addEventListener('click', () => { try { player.pause && player.pause(); setStatus('Paused'); } catch (e) { console.warn(e); } });
+        btnResume.addEventListener('click', () => { try { player.resume && player.resume(); setStatus('Running'); } catch (e) { console.warn(e); } });
+        btnReset.addEventListener('click', () => { try { player.reset && player.reset(); setStatus('Reset'); } catch (e) { console.warn(e); } });
+        btnFullscreen.addEventListener('click', async () => { try { if (player.requestFullscreen) await player.requestFullscreen(); else await document.documentElement.requestFullscreen(); } catch (e) { console.warn(e); } });
+
+        // drag & drop (file list and folder entries)
+        ['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('drag'); }));
+        ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('drag'); }));
+        drop.addEventListener('drop', async (e) => {
+          const items = e.dataTransfer && e.dataTransfer.items;
+          if (!items) {
+            // fallback: plain files
+            const files = Array.from(e.dataTransfer.files || []);
+            if (files.length === 1 && files[0].name.toLowerCase().endsWith('.zip')) return handleZip(files[0]);
+            if (files.length === 1 && files[0].name.toLowerCase().endsWith('.7z')) return handle7z(files[0]);
+            return loadFiles(files);
+          }
+
+          // If it's a single archive file, handle it immediately
+          if (items.length === 1 && items[0].kind === 'file') {
+            const file = items[0].getAsFile();
+            if (!file) return;
+            if (file.name.toLowerCase().endsWith('.zip')) return handleZip(file);
+            if (file.name.toLowerCase().endsWith('.7z')) return handle7z(file);
+          }
+
+          // Otherwise traverse entries (folders supported)
+          const collected = [];
+          for (const item of items) {
+            const entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
+            if (!entry) continue;
+            const res = await traverseEntry(entry);
+            if (res && res.length) collected.push(...res);
+          }
+          if (collected.length) return loadFiles(collected);
+
+          // fallback to files
+          const files = Array.from(e.dataTransfer.files || []);
+          loadFiles(files);
+        });
+
+        // quick check: warn if .wasm not served with correct mime (best-effort)
+        window.addEventListener('load', async () => {
+          try {
+            const r = await fetch('./wasmpsx_worker.wasm', { method: 'HEAD' });
+            if (r.ok) {
+              const ct = r.headers.get('content-type') || '';
+              if (!ct.includes('application/wasm')) {
+                console.warn('Warning: wasm file not served as application/wasm — fix server mime types.');
+                showError('Warning: .wasm file not served as application/wasm. See server config.');
+              }
+            }
+          } catch (e) {
+            // ignore: not critical
+            console.warn('Could not probe wasm file:', e);
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>
